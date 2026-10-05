@@ -1,0 +1,131 @@
+//@version=5
+indicator("Abdeefx Pro cisd", shorttitle="Abdeefx CISD", overlay=true, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════
+//  Abdeefx Pro CISD - Change in State of Delivery (ICT / SMC)
+//  Bullish: close above the highest Open of the last bearish series
+//  Bearish: close below the lowest Open of the last bullish series
+//  Visuals: lines and shapes only (no boxes, labels or alerts)
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Inputs ────────────────────────────────────────────────────
+var string G1 = "Logic"
+swingLen     = input.int(10, "Swing lookback (bars)", minval=2, group=G1)
+requireSweep = input.bool(true, "Only after swing sweep/touch", group=G1, tooltip="When ON, the candle series must sweep or touch the lowest low (bullish) or highest high (bearish) of the lookback window.")
+maxBars      = input.int(20, "Max bars from series end to trigger", minval=1, group=G1)
+stopAtBreak  = input.bool(true, "Stop line when level is closed back through", group=G1, tooltip="OFF = line extends to the right indefinitely.")
+
+var string G2 = "Bullish Style"
+bullCol      = input.color(#00c853, "Line / arrow color", group=G2)
+bullStyleSel = input.string("Solid", "Line style", options=["Solid", "Dashed", "Dotted"], group=G2)
+
+var string G3 = "Bearish Style"
+bearCol      = input.color(#ff1744, "Line / arrow color", group=G3)
+bearStyleSel = input.string("Solid", "Line style", options=["Solid", "Dashed", "Dotted"], group=G3)
+
+var string G4 = "Display"
+lineWidth    = input.int(2, "Line width", minval=1, maxval=5, group=G4)
+showLines    = input.bool(true, "Show lines", group=G4)
+showShapes   = input.bool(true, "Show arrows", group=G4)
+arrowSize    = input.string("Small", "Arrow size", options=["Tiny", "Small", "Normal", "Large"], group=G4)
+
+f_style(string s) =>
+    s == "Dashed" ? line.style_dashed : s == "Dotted" ? line.style_dotted : line.style_solid
+
+// ─── Sweep / touch detection ───────────────────────────────────
+lowSweep  = low  <= ta.lowest(low,   swingLen)[1]
+highSweep = high >= ta.highest(high, swingLen)[1]
+
+// ─── Candle series tracking ────────────────────────────────────
+isBear = close < open
+isBull = close > open
+
+// Last bearish series (local low) -> Bullish CISD
+var float bearLevel    = na   // highest Open of the series
+var int   bearLevelBar = na
+var int   bearLastBar  = na
+var bool  bearSwept    = false
+var bool  bearDone     = true
+
+// Last bullish series (local high) -> Bearish CISD
+var float bullLevel    = na   // lowest Open of the series
+var int   bullLevelBar = na
+var int   bullLastBar  = na
+var bool  bullSwept    = false
+var bool  bullDone     = true
+
+if isBear
+    if isBear[1]
+        if open > bearLevel
+            bearLevel    := open
+            bearLevelBar := bar_index
+        bearSwept := bearSwept or lowSweep
+    else
+        bearLevel    := open
+        bearLevelBar := bar_index
+        bearSwept    := lowSweep
+        bearDone     := false
+    bearLastBar := bar_index
+
+if isBull
+    if isBull[1]
+        if open < bullLevel
+            bullLevel    := open
+            bullLevelBar := bar_index
+        bullSwept := bullSwept or highSweep
+    else
+        bullLevel    := open
+        bullLevelBar := bar_index
+        bullSwept    := highSweep
+        bullDone     := false
+    bullLastBar := bar_index
+
+// ─── Extend active lines until broken ──────────────────────────
+var array<line> activeBull = array.new<line>()
+var array<line> activeBear = array.new<line>()
+
+if stopAtBreak
+    if array.size(activeBull) > 0
+        for i = array.size(activeBull) - 1 to 0
+            ln = array.get(activeBull, i)
+            line.set_x2(ln, bar_index)
+            if close < line.get_y1(ln)
+                array.remove(activeBull, i)
+    if array.size(activeBear) > 0
+        for i = array.size(activeBear) - 1 to 0
+            ln = array.get(activeBear, i)
+            line.set_x2(ln, bar_index)
+            if close > line.get_y1(ln)
+                array.remove(activeBear, i)
+
+// ─── CISD triggers ─────────────────────────────────────────────
+bullCISD = isBull and not bearDone and not na(bearLevel) and close > bearLevel and (bar_index - bearLastBar) <= maxBars and (not requireSweep or bearSwept)
+bearCISD = isBear and not bullDone and not na(bullLevel) and close < bullLevel and (bar_index - bullLastBar) <= maxBars and (not requireSweep or bullSwept)
+
+if bullCISD
+    if showLines
+        bl = line.new(bearLevelBar, bearLevel, bar_index, bearLevel, color=bullCol, width=lineWidth, style=f_style(bullStyleSel), extend=stopAtBreak ? extend.none : extend.right)
+        if stopAtBreak
+            array.push(activeBull, bl)
+    bearDone := true
+
+if bearCISD
+    if showLines
+        sl = line.new(bullLevelBar, bullLevel, bar_index, bullLevel, color=bearCol, width=lineWidth, style=f_style(bearStyleSel), extend=stopAtBreak ? extend.none : extend.right)
+        if stopAtBreak
+            array.push(activeBear, sl)
+    bullDone := true
+
+// ─── Signal arrows (size gated by input, one plot per size) ────
+bullShow = showShapes and bullCISD
+bearShow = showShapes and bearCISD
+
+plotshape(bullShow and arrowSize == "Tiny",   "Bullish CISD (Tiny)",   shape.triangleup,   location.belowbar, bullCol, size=size.tiny)
+plotshape(bullShow and arrowSize == "Small",  "Bullish CISD (Small)",  shape.triangleup,   location.belowbar, bullCol, size=size.small)
+plotshape(bullShow and arrowSize == "Normal", "Bullish CISD (Normal)", shape.triangleup,   location.belowbar, bullCol, size=size.normal)
+plotshape(bullShow and arrowSize == "Large",  "Bullish CISD (Large)",  shape.triangleup,   location.belowbar, bullCol, size=size.large)
+
+plotshape(bearShow and arrowSize == "Tiny",   "Bearish CISD (Tiny)",   shape.triangledown, location.abovebar, bearCol, size=size.tiny)
+plotshape(bearShow and arrowSize == "Small",  "Bearish CISD (Small)",  shape.triangledown, location.abovebar, bearCol, size=size.small)
+plotshape(bearShow and arrowSize == "Normal", "Bearish CISD (Normal)", shape.triangledown, location.abovebar, bearCol, size=size.normal)
+plotshape(bearShow and arrowSize == "Large",  "Bearish CISD (Large)",  shape.triangledown, location.abovebar, bearCol, size=size.large)
